@@ -29,14 +29,30 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Build image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            -t "${IMAGE}" \
+            .
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api:${{ inputs.image_tag }}
+
+      - name: Push image
+        run: docker push "${IMAGE}"
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api:${{ inputs.image_tag }}
+
+      - name: Save image artifact
+        run: docker save "${IMAGE}" | gzip > "/tmp/sub2api-${IMAGE_TAG}.tar.gz"
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/sub2api:${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
         with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          platforms: linux/amd64
-          tags: ghcr.io/${{ github.repository_owner }}/sub2api:${{ inputs.image_tag }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+          name: sub2api-${{ inputs.image_tag }}-docker-image
+          path: /tmp/sub2api-${{ inputs.image_tag }}.tar.gz
+          retention-days: 1
