@@ -69,6 +69,7 @@ const props = defineProps<{
   color: 'indigo' | 'emerald' | 'purple' | 'amber'
   windowStats?: WindowStats | null
   showNowWhenIdle?: boolean
+  quotaKnown?: boolean
 }>()
 
 const { t } = useI18n()
@@ -107,8 +108,13 @@ const labelClass = computed(() => {
   return colors[props.color]
 })
 
+const isQuotaKnown = computed(() => props.quotaKnown !== false)
+
 // Progress bar color based on utilization
 const barClass = computed(() => {
+  if (!isQuotaKnown.value) {
+    return 'bg-gray-300 dark:bg-gray-600'
+  }
   if (props.utilization >= 100) {
     return 'bg-red-500'
   } else if (props.utilization >= 80) {
@@ -120,6 +126,9 @@ const barClass = computed(() => {
 
 // Text color based on utilization
 const textClass = computed(() => {
+  if (!isQuotaKnown.value) {
+    return 'text-gray-400 dark:text-gray-500'
+  }
   if (props.utilization >= 100) {
     return 'text-red-600 dark:text-red-400'
   } else if (props.utilization >= 80) {
@@ -131,24 +140,30 @@ const textClass = computed(() => {
 
 // Bar width (capped at 100%)
 const barWidth = computed(() => {
+  if (!isQuotaKnown.value) {
+    return '0%'
+  }
   return `${Math.min(props.utilization, 100)}%`
 })
 
 // Display percentage (cap at 999% for readability)
 const displayPercent = computed(() => {
+  if (!isQuotaKnown.value) {
+    return '--'
+  }
   const percent = Math.round(props.utilization)
   return percent > 999 ? '>999%' : `${percent}%`
 })
 
 const shouldShowResetTime = computed(() => {
   if (props.resetsAt) return true
-  return Boolean(props.showNowWhenIdle && props.utilization <= 0)
+  return Boolean(isQuotaKnown.value && props.showNowWhenIdle && props.utilization <= 0)
 })
 
 // Format reset time
 const formatResetTime = computed(() => {
   // For rolling windows, when utilization is 0%, treat as immediately available.
-  if (props.showNowWhenIdle && props.utilization <= 0) {
+  if (isQuotaKnown.value && props.showNowWhenIdle && props.utilization <= 0) {
     return t('usage.resetNow')
   }
 

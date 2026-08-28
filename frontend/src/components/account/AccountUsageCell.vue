@@ -46,6 +46,7 @@
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
+          :quota-known="usageInfo.five_hour.quota_known"
           :window-stats="usageInfo.five_hour.window_stats"
           color="indigo"
         />
@@ -56,6 +57,7 @@
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
+          :quota-known="usageInfo.seven_day.quota_known"
           color="emerald"
         />
 
@@ -65,6 +67,7 @@
           label="7d S"
           :utilization="usageInfo.seven_day_sonnet.utilization"
           :resets-at="usageInfo.seven_day_sonnet.resets_at"
+          :quota-known="usageInfo.seven_day_sonnet.quota_known"
           color="purple"
         />
 
@@ -74,6 +77,7 @@
           label="7d F"
           :utilization="usageInfo.seven_day_fable.utilization"
           :resets-at="usageInfo.seven_day_fable.resets_at"
+          :quota-known="usageInfo.seven_day_fable.quota_known"
           color="amber"
         />
 
@@ -126,6 +130,7 @@
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
+          :quota-known="usageInfo.five_hour.quota_known"
           :window-stats="usageInfo.five_hour.window_stats"
           :show-now-when-idle="true"
           color="indigo"
@@ -135,6 +140,7 @@
           label="7d"
           :utilization="usageInfo.seven_day.utilization"
           :resets-at="usageInfo.seven_day.resets_at"
+          :quota-known="usageInfo.seven_day.quota_known"
           :window-stats="usageInfo.seven_day.window_stats"
           :show-now-when-idle="true"
           color="emerald"

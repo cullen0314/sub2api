@@ -234,7 +234,25 @@ func TestBuildCodexUsageProgressFromExtra_RejectsMismatchedWindowMinutes(t *test
 		if progress.Utilization != 42.0 {
 			t.Fatalf("expected Utilization=42, got %v", progress.Utilization)
 		}
+		if progress.QuotaKnown == nil || !*progress.QuotaKnown {
+			t.Fatalf("expected QuotaKnown=true for real 7d window, got %#v", progress.QuotaKnown)
+		}
 	})
+}
+
+func TestNewLocalStatsOnlyUsageProgressMarksQuotaUnknown(t *testing.T) {
+	t.Parallel()
+
+	progress := newLocalStatsOnlyUsageProgress()
+	if progress == nil {
+		t.Fatal("expected non-nil progress")
+	}
+	if progress.Utilization != 0 {
+		t.Fatalf("expected Utilization=0, got %v", progress.Utilization)
+	}
+	if progress.QuotaKnown == nil || *progress.QuotaKnown {
+		t.Fatalf("expected QuotaKnown=false for local stats placeholder, got %#v", progress.QuotaKnown)
+	}
 }
 
 func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {

@@ -147,6 +147,7 @@ type UsageProgress struct {
 	Utilization      float64      `json:"utilization"`            // 使用率百分比 (0-100+，100表示100%)
 	ResetsAt         *time.Time   `json:"resets_at"`              // 重置时间
 	RemainingSeconds int          `json:"remaining_seconds"`      // 距重置剩余秒数
+	QuotaKnown       *bool        `json:"quota_known,omitempty"`  // 是否有可信上游配额百分比；false 表示仅有本地窗口统计
 	WindowStats      *WindowStats `json:"window_stats,omitempty"` // 窗口期统计（从窗口开始到当前的使用量）
 	UsedRequests     int64        `json:"used_requests,omitempty"`
 	LimitRequests    int64        `json:"limit_requests,omitempty"`
@@ -606,14 +607,14 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.FiveHour, 5*time.Hour, now)); err == nil {
 		if usage.FiveHour == nil {
-			usage.FiveHour = &UsageProgress{Utilization: 0}
+			usage.FiveHour = newLocalStatsOnlyUsageProgress()
 		}
 		usage.FiveHour.WindowStats = windowStatsFromAccountStats(stats)
 	}
 
 	if stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, codexWindowStatsStart(usage.SevenDay, 7*24*time.Hour, now)); err == nil {
 		if usage.SevenDay == nil {
-			usage.SevenDay = &UsageProgress{Utilization: 0}
+			usage.SevenDay = newLocalStatsOnlyUsageProgress()
 		}
 		usage.SevenDay.WindowStats = windowStatsFromAccountStats(stats)
 	}
@@ -1163,6 +1164,13 @@ func (s *AccountUsageService) GetTodayStatsBatch(ctx context.Context, accountIDs
 	return result, nil
 }
 
+func newLocalStatsOnlyUsageProgress() *UsageProgress {
+	return &UsageProgress{
+		Utilization: 0,
+		QuotaKnown:  boolPtr(false),
+	}
+}
+
 func windowStatsFromAccountStats(stats *usagestats.AccountStats) *WindowStats {
 	if stats == nil {
 		return &WindowStats{}
@@ -1217,7 +1225,10 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 		return nil
 	}
 
-	progress := &UsageProgress{Utilization: parseExtraFloat64(usedRaw)}
+	progress := &UsageProgress{
+		Utilization: parseExtraFloat64(usedRaw),
+		QuotaKnown:  boolPtr(true),
+	}
 	if resetAtRaw, ok := extra[resetAtKey]; ok {
 		if resetAt, err := parseTime(fmt.Sprint(resetAtRaw)); err == nil {
 			progress.ResetsAt = &resetAt
