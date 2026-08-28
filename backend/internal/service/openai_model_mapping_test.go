@@ -277,6 +277,24 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 			want:    "gpt-5.5-pro",
 		},
 		{
+			name:    "oauth preserves GPT-5.6 Sol model",
+			account: &Account{Type: AccountTypeOAuth},
+			model:   "openai/gpt-5.6-sol",
+			want:    "gpt-5.6-sol",
+		},
+		{
+			name:    "oauth preserves GPT-5.6 Terra model",
+			account: &Account{Type: AccountTypeOAuth},
+			model:   "gpt-5.6-terra-high",
+			want:    "gpt-5.6-terra",
+		},
+		{
+			name:    "oauth preserves GPT-5.6 Luna model",
+			account: &Account{Type: AccountTypeOAuth},
+			model:   "gpt5.6luna",
+			want:    "gpt-5.6-luna",
+		},
+		{
 			name:    "oauth preserves codex auto review model",
 			account: &Account{Type: AccountTypeOAuth},
 			model:   "codex-auto-review",
