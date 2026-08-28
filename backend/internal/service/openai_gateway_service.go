@@ -136,8 +136,49 @@ type NormalizedCodexLimits struct {
 	Window7dMinutes *int
 }
 
+const (
+	codexCanonical5hWindowMinutes = 5 * 60
+	codexCanonical7dWindowMinutes = 7 * 24 * 60
+	codexWindowToleranceMinutes   = 60
+)
+
+type codexCanonicalWindow string
+
+const (
+	codexWindowUnknown codexCanonicalWindow = ""
+	codexWindow5h      codexCanonicalWindow = "5h"
+	codexWindow7d      codexCanonicalWindow = "7d"
+)
+
+func classifyCodexWindowMinutes(minutes int) codexCanonicalWindow {
+	switch {
+	case codexWindowMinutesWithinTolerance(minutes, codexCanonical5hWindowMinutes):
+		return codexWindow5h
+	case codexWindowMinutesWithinTolerance(minutes, codexCanonical7dWindowMinutes):
+		return codexWindow7d
+	default:
+		return codexWindowUnknown
+	}
+}
+
+func codexWindowMinutesWithinTolerance(minutes, target int) bool {
+	diff := minutes - target
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= codexWindowToleranceMinutes
+}
+
+func clearCodexNormalizedWindow(updates map[string]any, window string) {
+	updates["codex_"+window+"_used_percent"] = nil
+	updates["codex_"+window+"_reset_after_seconds"] = nil
+	updates["codex_"+window+"_reset_at"] = nil
+	updates["codex_"+window+"_window_minutes"] = nil
+}
+
 // Normalize converts primary/secondary fields to canonical 5h/7d fields.
-// Strategy: Compare window_minutes to determine which is 5h vs 7d.
+// Unknown windows, such as a 30d primary window, are kept only in raw
+// primary/secondary extra fields and are not projected into the 7d display.
 // Returns nil if snapshot is nil or has no useful data.
 func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 	if s == nil {
@@ -146,67 +187,50 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 	result := &NormalizedCodexLimits{}
 
-	primaryMins := 0
-	secondaryMins := 0
-	hasPrimaryWindow := false
-	hasSecondaryWindow := false
-
-	if s.PrimaryWindowMinutes != nil {
-		primaryMins = *s.PrimaryWindowMinutes
-		hasPrimaryWindow = true
-	}
-	if s.SecondaryWindowMinutes != nil {
-		secondaryMins = *s.SecondaryWindowMinutes
-		hasSecondaryWindow = true
-	}
-
-	// Determine mapping based on window_minutes
-	use5hFromPrimary := false
-	use7dFromPrimary := false
-
-	if hasPrimaryWindow && hasSecondaryWindow {
-		// Both known: smaller window is 5h, larger is 7d
-		if primaryMins < secondaryMins {
-			use5hFromPrimary = true
-		} else {
-			use7dFromPrimary = true
+	assign := func(window codexCanonicalWindow, used *float64, reset *int, minutes *int) {
+		switch window {
+		case codexWindow5h:
+			result.Used5hPercent = used
+			result.Reset5hSeconds = reset
+			result.Window5hMinutes = minutes
+		case codexWindow7d:
+			result.Used7dPercent = used
+			result.Reset7dSeconds = reset
+			result.Window7dMinutes = minutes
 		}
-	} else if hasPrimaryWindow {
-		// Only primary known: classify by threshold (<=360 min = 6h -> 5h window)
-		if primaryMins <= 360 {
-			use5hFromPrimary = true
-		} else {
-			use7dFromPrimary = true
+	}
+
+	hasPrimaryWindow := s.PrimaryWindowMinutes != nil
+	hasSecondaryWindow := s.SecondaryWindowMinutes != nil
+
+	if hasPrimaryWindow || hasSecondaryWindow {
+		primaryWindow := codexWindowUnknown
+		secondaryWindow := codexWindowUnknown
+		if hasPrimaryWindow {
+			primaryWindow = classifyCodexWindowMinutes(*s.PrimaryWindowMinutes)
 		}
-	} else if hasSecondaryWindow {
-		// Only secondary known: classify by threshold
-		if secondaryMins <= 360 {
-			// 5h from secondary, so primary (if any data) is 7d
-			use7dFromPrimary = true
-		} else {
-			// 7d from secondary, so primary (if any data) is 5h
-			use5hFromPrimary = true
+		if hasSecondaryWindow {
+			secondaryWindow = classifyCodexWindowMinutes(*s.SecondaryWindowMinutes)
+		}
+
+		assign(primaryWindow, s.PrimaryUsedPercent, s.PrimaryResetAfterSeconds, s.PrimaryWindowMinutes)
+		assign(secondaryWindow, s.SecondaryUsedPercent, s.SecondaryResetAfterSeconds, s.SecondaryWindowMinutes)
+
+		if !hasPrimaryWindow && secondaryWindow == codexWindow5h {
+			assign(codexWindow7d, s.PrimaryUsedPercent, s.PrimaryResetAfterSeconds, s.PrimaryWindowMinutes)
+		}
+		if !hasPrimaryWindow && secondaryWindow == codexWindow7d {
+			assign(codexWindow5h, s.PrimaryUsedPercent, s.PrimaryResetAfterSeconds, s.PrimaryWindowMinutes)
+		}
+		if !hasSecondaryWindow && primaryWindow == codexWindow5h {
+			assign(codexWindow7d, s.SecondaryUsedPercent, s.SecondaryResetAfterSeconds, s.SecondaryWindowMinutes)
+		}
+		if !hasSecondaryWindow && primaryWindow == codexWindow7d {
+			assign(codexWindow5h, s.SecondaryUsedPercent, s.SecondaryResetAfterSeconds, s.SecondaryWindowMinutes)
 		}
 	} else {
-		// No window_minutes: fall back to legacy assumption (primary=7d, secondary=5h)
-		use7dFromPrimary = true
-	}
-
-	// Assign values
-	if use5hFromPrimary {
-		result.Used5hPercent = s.PrimaryUsedPercent
-		result.Reset5hSeconds = s.PrimaryResetAfterSeconds
-		result.Window5hMinutes = s.PrimaryWindowMinutes
-		result.Used7dPercent = s.SecondaryUsedPercent
-		result.Reset7dSeconds = s.SecondaryResetAfterSeconds
-		result.Window7dMinutes = s.SecondaryWindowMinutes
-	} else if use7dFromPrimary {
-		result.Used7dPercent = s.PrimaryUsedPercent
-		result.Reset7dSeconds = s.PrimaryResetAfterSeconds
-		result.Window7dMinutes = s.PrimaryWindowMinutes
-		result.Used5hPercent = s.SecondaryUsedPercent
-		result.Reset5hSeconds = s.SecondaryResetAfterSeconds
-		result.Window5hMinutes = s.SecondaryWindowMinutes
+		assign(codexWindow7d, s.PrimaryUsedPercent, s.PrimaryResetAfterSeconds, s.PrimaryWindowMinutes)
+		assign(codexWindow5h, s.SecondaryUsedPercent, s.SecondaryResetAfterSeconds, s.SecondaryWindowMinutes)
 	}
 
 	return result
@@ -6817,29 +6841,47 @@ func buildCodexUsageExtraUpdates(snapshot *OpenAICodexUsageSnapshot, fallbackNow
 
 	// 归一化到 5h/7d 规范字段
 	if normalized := snapshot.Normalize(); normalized != nil {
+		has5hWindow := false
+		has7dWindow := false
 		if normalized.Used5hPercent != nil {
 			updates["codex_5h_used_percent"] = *normalized.Used5hPercent
+			has5hWindow = true
 		}
 		if normalized.Reset5hSeconds != nil {
 			updates["codex_5h_reset_after_seconds"] = *normalized.Reset5hSeconds
+			has5hWindow = true
 		}
 		if normalized.Window5hMinutes != nil {
 			updates["codex_5h_window_minutes"] = *normalized.Window5hMinutes
+			has5hWindow = true
 		}
 		if normalized.Used7dPercent != nil {
 			updates["codex_7d_used_percent"] = *normalized.Used7dPercent
+			has7dWindow = true
 		}
 		if normalized.Reset7dSeconds != nil {
 			updates["codex_7d_reset_after_seconds"] = *normalized.Reset7dSeconds
+			has7dWindow = true
 		}
 		if normalized.Window7dMinutes != nil {
 			updates["codex_7d_window_minutes"] = *normalized.Window7dMinutes
+			has7dWindow = true
 		}
 		if reset5hAt := codexResetAtRFC3339(baseTime, normalized.Reset5hSeconds); reset5hAt != nil {
 			updates["codex_5h_reset_at"] = *reset5hAt
+			has5hWindow = true
 		}
 		if reset7dAt := codexResetAtRFC3339(baseTime, normalized.Reset7dSeconds); reset7dAt != nil {
 			updates["codex_7d_reset_at"] = *reset7dAt
+			has7dWindow = true
+		}
+		if snapshot.PrimaryWindowMinutes != nil || snapshot.SecondaryWindowMinutes != nil {
+			if !has5hWindow {
+				clearCodexNormalizedWindow(updates, "5h")
+			}
+			if !has7dWindow {
+				clearCodexNormalizedWindow(updates, "7d")
+			}
 		}
 	}
 

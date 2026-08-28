@@ -206,6 +206,37 @@ func TestAccountUsageService_GetOpenAIUsage_DoesNotPromoteCodexExtraToRateLimit(
 	}
 }
 
+func TestBuildCodexUsageProgressFromExtra_RejectsMismatchedWindowMinutes(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 28, 16, 52, 0, 0, time.UTC)
+
+	t.Run("30d data is not a 7d window", func(t *testing.T) {
+		extra := map[string]any{
+			"codex_7d_used_percent":   100.0,
+			"codex_7d_window_minutes": 43200,
+			"codex_7d_reset_at":       "2026-09-27T06:45:21Z",
+		}
+		if progress := buildCodexUsageProgressFromExtra(extra, "7d", now); progress != nil {
+			t.Fatalf("expected nil progress for mismatched 30d window, got %#v", progress)
+		}
+	})
+
+	t.Run("real 7d data is still accepted", func(t *testing.T) {
+		extra := map[string]any{
+			"codex_7d_used_percent":   42.0,
+			"codex_7d_window_minutes": 10080,
+			"codex_7d_reset_at":       "2026-08-30T00:00:00Z",
+		}
+		progress := buildCodexUsageProgressFromExtra(extra, "7d", now)
+		if progress == nil {
+			t.Fatal("expected non-nil progress for real 7d window")
+		}
+		if progress.Utilization != 42.0 {
+			t.Fatalf("expected Utilization=42, got %v", progress.Utilization)
+		}
+	})
+}
+
 func TestBuildCodexUsageProgressFromExtra_ZerosExpiredWindow(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 3, 16, 12, 0, 0, 0, time.UTC)

@@ -1182,9 +1182,11 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 	}
 
 	var (
-		usedPercentKey string
-		resetAfterKey  string
-		resetAtKey     string
+		usedPercentKey   string
+		resetAfterKey    string
+		resetAtKey       string
+		windowMinutesKey string
+		expectedWindow   codexCanonicalWindow
 	)
 
 	switch window {
@@ -1192,12 +1194,22 @@ func buildCodexUsageProgressFromExtra(extra map[string]any, window string, now t
 		usedPercentKey = "codex_5h_used_percent"
 		resetAfterKey = "codex_5h_reset_after_seconds"
 		resetAtKey = "codex_5h_reset_at"
+		windowMinutesKey = "codex_5h_window_minutes"
+		expectedWindow = codexWindow5h
 	case "7d":
 		usedPercentKey = "codex_7d_used_percent"
 		resetAfterKey = "codex_7d_reset_after_seconds"
 		resetAtKey = "codex_7d_reset_at"
+		windowMinutesKey = "codex_7d_window_minutes"
+		expectedWindow = codexWindow7d
 	default:
 		return nil
+	}
+
+	if rawWindowMinutes, ok := extra[windowMinutesKey]; ok {
+		if classifyCodexWindowMinutes(parseExtraInt(rawWindowMinutes)) != expectedWindow {
+			return nil
+		}
 	}
 
 	usedRaw, ok := extra[usedPercentKey]

@@ -147,16 +147,34 @@ func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 	}
 }
 
+func TestCalculateOpenAI429ResetTime_ThirtyDayPrimaryIsNot7d(t *testing.T) {
+	svc := &RateLimitService{}
+
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "2591568")
+	headers.Set("x-codex-primary-window-minutes", "43200")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "0")
+	headers.Set("x-codex-secondary-window-minutes", "0")
+
+	if resetAt := svc.calculateOpenAI429ResetTime(headers); resetAt != nil {
+		t.Fatalf("30d primary window must not be treated as 7d account reset: %v", resetAt)
+	}
+}
+
 type openAI429SnapshotRepo struct {
 	mockAccountRepoForGemini
 	rateLimitedID      int64
+	rateLimitedAt      time.Time
 	updatedExtra       map[string]any
 	bulkUpdatedIDs     []int64
 	bulkUpdatedPayload AccountBulkUpdate
 }
 
-func (r *openAI429SnapshotRepo) SetRateLimited(_ context.Context, id int64, _ time.Time) error {
+func (r *openAI429SnapshotRepo) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitedID = id
+	r.rateLimitedAt = resetAt
 	return nil
 }
 
@@ -198,6 +216,34 @@ func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 	if got := repo.updatedExtra["codex_7d_used_percent"]; got != 100.0 {
 		t.Fatalf("codex_7d_used_percent = %v, want 100", got)
 	}
+}
+
+func TestHandle429_OpenAIThirtyDayCodexHeaderDoesNotUseMonthlyReset(t *testing.T) {
+	repo := &openAI429SnapshotRepo{}
+	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	account := &Account{ID: 125, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "2591568")
+	headers.Set("x-codex-primary-window-minutes", "43200")
+	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-reset-after-seconds", "0")
+	headers.Set("x-codex-secondary-window-minutes", "0")
+	body := []byte(`{"error":{"type":"usage_limit_reached","message":"limit reached","resets_at":1893456000}}`)
+
+	before := time.Now()
+	svc.handle429(context.Background(), account, headers, body)
+
+	require.Equal(t, account.ID, repo.rateLimitedID)
+	require.NotZero(t, repo.rateLimitedAt)
+	require.Less(t, repo.rateLimitedAt.Sub(before), time.Hour, "30d codex window must not become a long global account rate limit")
+	require.Equal(t, 100.0, repo.updatedExtra["codex_primary_used_percent"])
+	require.Equal(t, 43200, repo.updatedExtra["codex_primary_window_minutes"])
+	require.Contains(t, repo.updatedExtra, "codex_7d_used_percent")
+	require.Nil(t, repo.updatedExtra["codex_7d_used_percent"])
+	require.Contains(t, repo.updatedExtra, "codex_7d_reset_at")
+	require.Nil(t, repo.updatedExtra["codex_7d_reset_at"])
 }
 
 func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
@@ -292,6 +338,38 @@ func TestNormalizedCodexLimits(t *testing.T) {
 	}
 	if normalized.Reset5hSeconds == nil || *normalized.Reset5hSeconds != 17369 {
 		t.Errorf("expected Reset5hSeconds=17369, got %v", normalized.Reset5hSeconds)
+	}
+}
+
+func TestNormalizedCodexLimits_ThirtyDayPrimaryIsUnknown(t *testing.T) {
+	pUsed := 100.0
+	pReset := 2591568
+	pWindow := 43200
+	sUsed := 0.0
+	sReset := 0
+	sWindow := 0
+
+	snapshot := &OpenAICodexUsageSnapshot{
+		PrimaryUsedPercent:         &pUsed,
+		PrimaryResetAfterSeconds:   &pReset,
+		PrimaryWindowMinutes:       &pWindow,
+		SecondaryUsedPercent:       &sUsed,
+		SecondaryResetAfterSeconds: &sReset,
+		SecondaryWindowMinutes:     &sWindow,
+	}
+
+	normalized := snapshot.Normalize()
+	if normalized == nil {
+		t.Fatal("expected non-nil normalized")
+	}
+	if normalized.Used7dPercent != nil {
+		t.Fatalf("30d primary must not map to Used7dPercent, got %v", *normalized.Used7dPercent)
+	}
+	if normalized.Reset7dSeconds != nil {
+		t.Fatalf("30d primary must not map to Reset7dSeconds, got %v", *normalized.Reset7dSeconds)
+	}
+	if normalized.Used5hPercent != nil {
+		t.Fatalf("0-minute secondary must not map to Used5hPercent, got %v", *normalized.Used5hPercent)
 	}
 }
 

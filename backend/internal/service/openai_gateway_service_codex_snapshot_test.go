@@ -137,6 +137,45 @@ func TestBuildCodexUsageExtraUpdates_FreshAccountUsedPercentNotInverted_Issue299
 	}
 }
 
+func TestBuildCodexUsageExtraUpdates_ThirtyDayPrimaryDoesNotPopulate7d(t *testing.T) {
+	primaryUsed := 100.0
+	primaryReset := 2591568
+	primaryWindow := 43200
+	secondaryUsed := 0.0
+	secondaryReset := 0
+	secondaryWindow := 0
+
+	snapshot := &OpenAICodexUsageSnapshot{
+		PrimaryUsedPercent:         &primaryUsed,
+		PrimaryResetAfterSeconds:   &primaryReset,
+		PrimaryWindowMinutes:       &primaryWindow,
+		SecondaryUsedPercent:       &secondaryUsed,
+		SecondaryResetAfterSeconds: &secondaryReset,
+		SecondaryWindowMinutes:     &secondaryWindow,
+		UpdatedAt:                  "2026-08-28T06:52:33Z",
+	}
+
+	updates := buildCodexUsageExtraUpdates(snapshot, time.Date(2026, 8, 28, 6, 52, 33, 0, time.UTC))
+	if updates == nil {
+		t.Fatal("expected non-nil updates")
+	}
+	if got := updates["codex_primary_used_percent"]; got != 100.0 {
+		t.Fatalf("codex_primary_used_percent = %v, want 100", got)
+	}
+	if got := updates["codex_primary_window_minutes"]; got != 43200 {
+		t.Fatalf("codex_primary_window_minutes = %v, want 43200", got)
+	}
+	if got, ok := updates["codex_7d_used_percent"]; !ok || got != nil {
+		t.Fatalf("30d primary window must clear codex_7d_used_percent, got %v in %#v", got, updates)
+	}
+	if got, ok := updates["codex_7d_reset_at"]; !ok || got != nil {
+		t.Fatalf("30d primary window must clear codex_7d_reset_at, got %v in %#v", got, updates)
+	}
+	if got, ok := updates["codex_5h_used_percent"]; !ok || got != nil {
+		t.Fatalf("0-minute secondary window must clear codex_5h_used_percent, got %v in %#v", got, updates)
+	}
+}
+
 func TestBuildCodexUsageExtraUpdates_FallbackToNowWhenUpdatedAtInvalid(t *testing.T) {
 	primaryUsed := 15.0
 	primaryReset := 30
