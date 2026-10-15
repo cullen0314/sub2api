@@ -149,3 +149,80 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 	require.NotNil(t, usage.SevenDay,
 		"returned UsageInfo.SevenDay must be non-nil (rebuild from merged Extra must happen)")
 }
+
+func TestGetOpenAIUsage_NormalOAuthForceRefreshesWindowsFromQuotaAPI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	previousSnapshotAt := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	account := &Account{
+		ID:       3,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "org-normal-account",
+		},
+		Extra: map[string]any{
+			"openai_oauth_responses_websockets_v2_enabled": false,
+			"codex_5h_used_percent":                        89.0,
+			"codex_5h_window_minutes":                      300,
+			"codex_7d_used_percent":                        61.0,
+			"codex_7d_window_minutes":                      10080,
+			"codex_usage_updated_at":                       previousSnapshotAt,
+		},
+	}
+
+	updateExtraCh := make(chan map[string]any, 1)
+	repo := &sparkShadowUsageTestRepo{
+		accounts:      map[int64]*Account{account.ID: account},
+		updateExtraCh: updateExtraCh,
+	}
+	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "fake-access-token",
+	}}
+	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
+
+	var capturedAccountID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAccountID = r.Header.Get("chatgpt-account-id")
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(OpenAIQuotaUsage{
+			RateLimit: &OpenAIRateLimit{
+				PrimaryWindow: &OpenAIRateLimitWindow{
+					UsedPercent:        13,
+					ResetAfterSeconds:  17000,
+					LimitWindowSeconds: 18000,
+				},
+				SecondaryWindow: &OpenAIRateLimitWindow{
+					UsedPercent:        2,
+					ResetAfterSeconds:  600000,
+					LimitWindowSeconds: 604800,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	quotaService := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := &AccountUsageService{
+		accountRepo:        repo,
+		openAIQuotaService: quotaService,
+	}
+
+	usage, err := svc.getOpenAIUsage(ctx, account, true)
+	require.NoError(t, err)
+	require.Equal(t, "org-normal-account", capturedAccountID)
+	require.NotNil(t, usage.FiveHour)
+	require.NotNil(t, usage.SevenDay)
+	require.InDelta(t, 13, usage.FiveHour.Utilization, 0.01)
+	require.InDelta(t, 2, usage.SevenDay.Utilization, 0.01)
+
+	select {
+	case updates := <-updateExtraCh:
+		require.InDelta(t, 13, updates["codex_5h_used_percent"], 0.01)
+		require.InDelta(t, 2, updates["codex_7d_used_percent"], 0.01)
+		require.NotEqual(t, previousSnapshotAt, updates["codex_usage_updated_at"])
+	case <-time.After(2 * time.Second):
+		t.Fatal("UpdateExtra was not called within timeout")
+	}
+}

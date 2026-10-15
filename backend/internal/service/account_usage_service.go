@@ -573,31 +573,36 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	applyExtraToUsage(usage, account.Extra, now)
 
 	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
-		if account.IsShadow() {
-			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
-			// via the shared OpenAIQuotaService, which resolves credentials from the
-			// parent account.  The result is written to the shadow row's own codex_*
-			// Extra keys and immediately reflected in the returned UsageInfo.
-			if s.openAIQuotaService != nil {
-				if quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID); err == nil {
-					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); len(updates) > 0 {
-						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
-						if usage.UpdatedAt == nil {
-							usage.UpdatedAt = &now
-						}
-						applyExtraToUsage(usage, account.Extra, now)
-					}
+		var updates map[string]any
+		if s.openAIQuotaService != nil {
+			if quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID); err == nil {
+				if account.IsShadow() {
+					updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
+				} else {
+					updates = buildCodexRateLimitWindowExtraUpdates(quotaUsage.RateLimit, now)
 				}
+			} else {
+				slog.Warn("openai_quota_snapshot_refresh_failed", "account_id", account.ID, "error", err)
 			}
-		} else {
-			if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && len(updates) > 0 {
-				mergeAccountExtra(account, updates)
-				if usage.UpdatedAt == nil {
-					usage.UpdatedAt = &now
-				}
-				applyExtraToUsage(usage, account.Extra, now)
+		}
+
+		// Keep the response-header probe as a compatibility fallback for normal
+		// accounts whose /wham/usage response does not expose the global windows.
+		if !account.IsShadow() && len(updates) == 0 {
+			if probeUpdates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil {
+				updates = probeUpdates
+			} else {
+				slog.Warn("openai_codex_probe_refresh_failed", "account_id", account.ID, "error", err)
 			}
+		}
+
+		if len(updates) > 0 {
+			mergeAccountExtra(account, updates)
+			s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+			if usage.UpdatedAt == nil {
+				usage.UpdatedAt = &now
+			}
+			applyExtraToUsage(usage, account.Extra, now)
 		}
 	}
 
@@ -642,13 +647,9 @@ func isOpenAICodexSnapshotStale(account *Account, now time.Time) bool {
 	if account == nil || !account.IsOpenAIOAuth() {
 		return false
 	}
-	// 普通账号的 codex 刷新走 probe(/responses 头),要求 WSv2;但 spark 影子走 QueryUsage
-	// (/wham/usage body 的 codex_bengalfox),与 WSv2 无关——不能用 WSv2 门控其 staleness,否则首刷后
-	// codex_5h/7d 已存在→staleness 恒 false→spark 窗口永久冻结(外审第9轮 P1)。影子改按
-	// codex_usage_updated_at TTL 判定;实际查询频率仍由 shouldProbeOpenAICodexSnapshot 的缓存 TTL 节流。
-	if !account.IsShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
-		return false
-	}
+	// OpenAI OAuth usage refreshes from /wham/usage for both normal and spark
+	// shadow accounts, so snapshot staleness is independent of the Responses
+	// WebSocket v2 transport setting. The probe cache still throttles refreshes.
 	if account.Extra == nil {
 		return true
 	}
@@ -737,11 +738,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if err != nil {
 		return nil, err
 	}
-	if len(updates) > 0 {
-		s.persistOpenAICodexProbeSnapshot(account.ID, updates)
-		return updates, nil
-	}
-	return nil, nil
+	return updates, nil
 }
 
 func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, updates map[string]any) {

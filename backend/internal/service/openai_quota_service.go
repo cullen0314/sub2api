@@ -453,11 +453,19 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 	if spark == nil {
 		return nil
 	}
+	return buildCodexRateLimitWindowExtraUpdates(spark, now)
+}
 
+// buildCodexRateLimitWindowExtraUpdates maps the global /wham/usage rate_limit
+// windows to the canonical codex_5h_* and codex_7d_* account Extra keys.
+func buildCodexRateLimitWindowExtraUpdates(rateLimit *OpenAIRateLimit, now time.Time) map[string]any {
+	if rateLimit == nil {
+		return nil
+	}
 	// Reuse OpenAICodexUsageSnapshot / Normalize to map primary/secondary windows
 	// to canonical 5h/7d buckets (same logic as probeOpenAICodexSnapshot).
 	snap := &OpenAICodexUsageSnapshot{}
-	if w := spark.PrimaryWindow; w != nil {
+	if w := rateLimit.PrimaryWindow; w != nil {
 		p := w.UsedPercent
 		snap.PrimaryUsedPercent = &p
 		ra := int(w.ResetAfterSeconds)
@@ -465,7 +473,7 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 		wm := int(w.LimitWindowSeconds / 60)
 		snap.PrimaryWindowMinutes = &wm
 	}
-	if w := spark.SecondaryWindow; w != nil {
+	if w := rateLimit.SecondaryWindow; w != nil {
 		p := w.UsedPercent
 		snap.SecondaryUsedPercent = &p
 		ra := int(w.ResetAfterSeconds)
